@@ -28,16 +28,20 @@ with st.sidebar:
     st.info("""
     **Model Selection Guide:**
     * **Llama 3.3 70B:** General Logic & Chat.
-    * **Llama 3.2 Vision:** Required for Images/Videos.
-    * **DeepSeek R1:** Complex Reasoning & Coding.
+    * **Llama 3.2 Vision (11B):** Required for Images.
+    * **DeepSeek R1:** Complex Reasoning & Math.
     * **Mixtral 8x7B:** Large PDF Summarization.
     """)
     
     st.divider()
     model_choice = st.selectbox(
         "Select AI Brain:",
-        ["llama-3.3-70b-versatile", "llama-3.2-90b-vision-preview", 
-         "mixtral-8x7b-32768", "deepseek-r1-distill-llama-70b"]
+        [
+            "llama-3.3-70b-versatile", 
+            "llama-3.2-11b-vision-preview", 
+            "mixtral-8x7b-32768", 
+            "deepseek-r1-distill-llama-70b"
+        ]
     )
     
     if st.session_state.messages:
@@ -61,7 +65,7 @@ uploaded_file = st.file_uploader("Upload PDF or Image", type=["pdf", "jpg", "jpe
 
 if uploaded_file:
     if "image" in uploaded_file.type and "vision" not in model_choice:
-        st.warning("⚠️ Warning: Please select a 'Vision' model to analyze this image correctly.")
+        st.warning("⚠️ Warning: Please select the 'llama-3.2-11b-vision-preview' model for images.")
     
     with st.spinner("Processing file..."):
         st.session_state.file_data = process_file(uploaded_file)
