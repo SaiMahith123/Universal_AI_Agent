@@ -45,7 +45,7 @@ with st.sidebar:
         st.download_button("📥 Save Chat History", chat_history, file_name="mahi_ai_chat.txt")
 
     st.divider()
-    st.caption("Developed by Mahi | B.Tech 2025")
+    st.caption("Developed by T Sai Mahit | B.E in AI-ML (2021-25)")
 
 def process_file(file):
     if file.type == "application/pdf":
