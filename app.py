@@ -5,7 +5,7 @@ from langchain.agents import initialize_agent, AgentType
 import datetime
 
 st.set_page_config(page_title="Universal AI Agent", layout="centered")
-st.title("🌐 Universal AI Agent")
+st.title("🤖 Universal AI Agent")
 
 search_tool = DuckDuckGoSearchRun()
 
@@ -38,7 +38,7 @@ if prompt := st.chat_input("Ask me anything..."):
     st.chat_message("user").write(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Searching and thinking..."):
+        with st.spinner("Searching the web and thinking..."):
             today = datetime.datetime.now().strftime("%Y-%m-%d")
             full_query = f"Today is {today}. {prompt}"
             try:
