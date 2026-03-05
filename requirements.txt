@@ -1,4 +1,4 @@
 streamlit
 langchain-groq
 duckduckgo-search
-langchain-community
+langchain
