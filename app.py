@@ -36,6 +36,6 @@ with st.chat_message("assistant"):
             response = agent_executor.invoke({"input": full_query})
             output = response["output"]
             st.write(output)
-            st.session_state.messages.append({"role": "assistant", "content": output})
-            except Exception as e:
+            st.session_state.messages.append({"role": "assistant", "content": output}))
+        except Exception as e:
             st.error(f"Error: {e}")
