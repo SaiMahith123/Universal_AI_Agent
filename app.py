@@ -1,29 +1,45 @@
 import streamlit as st
-from langchain_groq import ChatGroq
-from langchain_community.tools import DuckDuckGoSearchRun
-from langchain.agents import create_react_agent, AgentExecutor
-from langchain import hub
-import datetime
+from groq import Groq
+import PyPDF2
 
-st.set_page_config(page_title="Universal AI Agent", layout="centered")
-st.title("🤖 Universal AI Assistant")
+st.set_page_config(page_title="Universal Groq AI", layout="wide")
+st.title("🤖 Universal Multimedia AI Assistant")
 
 if "GROQ_API_KEY" in st.secrets:
-    llm = ChatGroq(
-        groq_api_key=st.secrets["GROQ_API_KEY"], 
-        model_name="mixtral-8x7b-32768",
-        temperature=0
-    )
+    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 else:
     st.error("Please add GROQ_API_KEY to Streamlit Secrets!")
     st.stop()
 
-search_tool = DuckDuckGoSearchRun()
-tools = [search_tool]
-prompt_template = hub.pull("hwchase17/react")
+with st.sidebar:
+    st.header("Model Settings")
+    model_choice = st.selectbox(
+        "Choose a Model:",
+        [
+            "llama-3.3-70b-versatile",
+            "llama-3.2-90b-vision-preview",
+            "llama-3.2-11b-vision-preview",
+            "mixtral-8x7b-32768",
+            "gemma2-9b-it",
+            "deepseek-r1-distill-llama-70b"
+        ]
+    )
+    st.info("Note: Use 'Vision' models for images.")
 
-agent = create_react_agent(llm, tools, prompt_template)
-agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True, handle_parsing_errors=True)
+uploaded_file = st.file_uploader("Upload PDF, Image, or Video", type=["pdf", "jpg", "jpeg", "png", "mp4"])
+
+def extract_pdf_text(file):
+    pdf_reader = PyPDF2.PdfReader(file)
+    return "".join([page.extract_text() for page in pdf_reader.pages])
+
+content_context = ""
+if uploaded_file:
+    if uploaded_file.type == "application/pdf":
+        content_context = extract_pdf_text(uploaded_file)
+        st.success("PDF Text Extracted!")
+    else:
+        content_context = f"The user has uploaded a multimedia file: {uploaded_file.name}"
+        st.image(uploaded_file) if "image" in uploaded_file.type else st.video(uploaded_file)
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -31,18 +47,20 @@ if "messages" not in st.session_state:
 for msg in st.session_state.messages:
     st.chat_message(msg["role"]).write(msg["content"])
 
-if user_input := st.chat_input("Ask me anything..."):
-    st.session_state.messages.append({"role": "user", "content": user_input})
-    st.chat_message("user").write(user_input)
-
+if prompt := st.chat_input("Ask about your file or anything else..."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    st.chat_message("user").write(prompt)
+    
+    combined_prompt = f"Context: {content_context}\n\nQuestion: {prompt}"
+    
     with st.chat_message("assistant"):
-        with st.spinner("Searching and thinking..."):
-            today = datetime.datetime.now().strftime("%Y-%m-%d")
-            full_query = f"Today is {today}. {user_input}"
-            try:
-                response = agent_executor.invoke({"input": full_query})
-                output = response["output"]
-                st.write(output)
-                st.session_state.messages.append({"role": "assistant", "content": output})
-            except Exception as e:
-                st.error(f"Error: {e}")
+        try:
+            chat_completion = client.chat.completions.create(
+                messages=[{"role": "user", "content": combined_prompt}],
+                model=model_choice,
+            )
+            response = chat_completion.choices[0].message.content
+            st.write(response)
+            st.session_state.messages.append({"role": "assistant", "content": response})
+        except Exception as e:
+            st.error(f"Error: {e}")
