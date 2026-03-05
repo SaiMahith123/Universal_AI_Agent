@@ -38,7 +38,7 @@ if prompt := st.chat_input("Ask me anything..."):
     st.chat_message("user").write(prompt)
 
     with st.chat_message("assistant"):
-        with st.spinner("Searching the web and thinking..."):
+        with st.spinner("Searching and thinking..."):
             today = datetime.datetime.now().strftime("%Y-%m-%d")
             full_query = f"Today is {today}. {prompt}"
             try:
