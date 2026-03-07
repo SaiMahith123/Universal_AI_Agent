@@ -29,14 +29,9 @@ st.markdown("""
         .stChatInputContainer { position: fixed; bottom: 20px; z-index: 1000; }
         .main .block-container { padding-bottom: 150px; }
         .file-card { 
-            padding: 12px; 
-            border-radius: 10px; 
-            border: 1px solid #4A4A4A; 
-            background-color: #1E1E1E; 
-            display: flex; 
-            align-items: center; 
-            gap: 10px; 
-            margin-bottom: 10px; 
+            padding: 12px; border-radius: 10px; border: 1px solid #4A4A4A; 
+            background-color: #1E1E1E; display: flex; align-items: center; 
+            gap: 10px; margin-bottom: 10px; 
         }
     </style>
 """, unsafe_allow_html=True)
@@ -66,27 +61,36 @@ def get_embed_model():
 
 # --- 3. MULTI-DOCUMENT PROCESSING (PDF & PPT) ---
 def process_docs(uploaded_file):
-    chunks, metadata = [], []
+    chunks = []
+    metadata = []
+    
     # PDF parsing logic
     if uploaded_file.name.lower().endswith('.pdf'):
         reader = PyPDF2.PdfReader(uploaded_file)
         for i, page in enumerate(reader.pages):
             text = page.extract_text()
             if text:
-                p_chunks = [text[j:j+1000] for j in range(0, len(text), 800)]
-                chunks.extend(p_chunks)
-                metadata.extend([f"PDF Pg {i+1}"] * len(p_chunks))
+                # 1000 char chunks with overlap for context
+                for j in range(0, len(text), 800):
+                    chunk = text[j:j+1000]
+                    chunks.append(chunk)
+                    metadata.append(f"PDF Pg {i+1}")
+                    
     # PPT parsing logic
     elif uploaded_file.name.lower().endswith(('.ppt', '.pptx')):
         prs = Presentation(uploaded_file)
         for i, slide in enumerate(prs.slides):
-            text = " ".join([sh.text for sh in slide.shapes if hasattr(sh, "text")])
-            if text:
-                s_chunks = [text[j:j+1000] for j in range(0, len(text), 800)]
-                chunks.extend(s_chunks)
-                metadata.extend([f"PPT Slide {i+1}"] * len(s_chunks))
+            slide_text = ""
+            for shape in slide.shapes:
+                if hasattr(shape, "text"):
+                    slide_text += shape.text + " "
+            if slide_text:
+                for j in range(0, len(slide_text), 800):
+                    chunk = slide_text[j:j+1000]
+                    chunks.append(chunk)
+                    metadata.append(f"PPT Slide {i+1}")
     
-    # Vector indexing
+    # Vector indexing with FAISS
     if chunks:
         em = get_embed_model()
         embeddings = em.encode(chunks)
@@ -100,21 +104,18 @@ def process_docs(uploaded_file):
 with st.sidebar:
     st.header("⚙️ Settings")
     
-    # UPDATED: Verified Active IDs for Groq as of March 2026
+    # UPDATED: Verified Active IDs for March 2026
     model_choice = st.selectbox("Select Brain:", [
         "llama-3.3-70b-versatile", 
         "meta-llama/llama-4-scout-17b-16e-instruct", 
-        "gpt-oss-120b", # Groq's current reasoning recommendation
-        "deepseek-r1-70b" # Direct DeepSeek replacement
+        "openai/gpt-oss-120b"  # Verified Reasoning ID
     ])
     
-    # Vertical Guide
-    st.info("💡 **Model Guide:**\n- **Llama 3.3:** Best for Docs\n- **Llama 4:** Best for Images\n- **GPT-OSS:** High Reasoning\n- **DeepSeek:** Logic/Math")
+    st.info("💡 **Model Guide:**\n- **Llama 3.3:** Best for PDFs & PPTs\n- **Llama 4:** Best for Vision\n- **GPT-OSS:** Advanced Logic/Math")
     
     voice_on = st.toggle("🔊 Auto-Play AI Voice", value=True)
     st.divider()
     
-    # Download Chat History logic
     if st.session_state.messages:
         chat_text = "\n\n".join([f"{m['role'].upper()}: {m['content']}" for m in st.session_state.messages])
         st.download_button("📥 Download Chat History", data=chat_text, file_name="mahi_chat.txt")
@@ -141,7 +142,7 @@ if prompt_data:
     user_text = prompt_data.text or ""
     current_files = []
 
-    # Whisper transcription
+    # Whisper transcription logic
     if prompt_data.audio:
         with st.spinner("🎤 Transcribing..."):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
@@ -152,7 +153,7 @@ if prompt_data:
                 user_text = tr.text
             os.remove(tmp_path)
 
-    # File processing loop
+    # File processing logic
     if prompt_data.files:
         for f in prompt_data.files:
             if f.name.lower().endswith(('.pdf', '.pptx', '.ppt')):
@@ -169,21 +170,24 @@ if prompt_data:
         st.session_state.messages.append(new_msg)
         st.rerun()
 
-# --- 7. ASSISTANT RESPONSE GENERATION ---
+# --- 7. RESPONSE GENERATION & TALK-BACK ---
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
     last_msg = st.session_state.messages[-1]
     query = last_msg["content"]
 
+    # RAG Retrieval from docs
     context = ""
     if st.session_state.vector_store and query:
         qv = get_embed_model().encode([query])
         D, I = st.session_state.vector_store["index"].search(np.array(qv).astype('float32'), k=5)
         context = "\n".join([st.session_state.vector_store["chunks"][i] for i in I[0]])
 
-    api_messages = [{"role": "system", "content": "You are Mahi's AI. Use provided context and history for your answers."}]
+    # Memory Buffer (Sliding Window of last 6)
+    api_messages = [{"role": "system", "content": "You are Mahi's AI. Use provided context and history."}]
     for m in st.session_state.messages[-6:-1]: 
         api_messages.append({"role": m["role"], "content": m["content"]})
 
+    # Routing logic (Vision vs Text)
     if st.session_state.image_list:
         active_model = "meta-llama/llama-4-scout-17b-16e-instruct"
         content_payload = [{"type": "text", "text": f"Instruction: {query if query else 'Analyze images.'}"}]
@@ -197,25 +201,28 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
 
     with st.chat_message("assistant"):
         try:
+            # Explicit stream handling to prevent cutoffs
             stream = client.chat.completions.create(model=active_model, messages=api_messages, stream=True)
-            def parse(s):
+            def parse_chunks(s):
                 for c in s:
-                    if c.choices[0].delta.content: yield c.choices[0].delta.content
+                    if c.choices[0].delta.content:
+                        yield c.choices[0].delta.content
             
-            resp = st.write_stream(parse(stream))
+            resp = st.write_stream(parse_chunks(stream))
             st.session_state.messages.append({"role": "assistant", "content": resp})
             st.session_state.image_list = [] 
             
             # Talk-Back logic
             if voice_on and resp:
                 with st.spinner("🔊 Speaking..."):
-                    auto_play(text_to_audio(resp, language='en'))
-            
+                    audio_bytes = text_to_audio(resp, language='en')
+                    st.session_state.last_audio = audio_bytes 
+                    auto_play(audio_bytes)
             st.rerun()
         except Exception as e:
             st.error(f"Error during generation: {e}")
 
-# Audio re-trigger to handle browser policies
+# High-reliability audio re-trigger for browser autoplay
 if st.session_state.last_audio:
     auto_play(st.session_state.last_audio)
     st.session_state.last_audio = None
