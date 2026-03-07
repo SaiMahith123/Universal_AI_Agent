@@ -67,6 +67,7 @@ def get_embed_model():
 # --- 3. MULTI-DOCUMENT PROCESSING (PDF & PPT) ---
 def process_docs(uploaded_file):
     chunks, metadata = [], []
+    # PDF parsing logic
     if uploaded_file.name.lower().endswith('.pdf'):
         reader = PyPDF2.PdfReader(uploaded_file)
         for i, page in enumerate(reader.pages):
@@ -75,6 +76,7 @@ def process_docs(uploaded_file):
                 p_chunks = [text[j:j+1000] for j in range(0, len(text), 800)]
                 chunks.extend(p_chunks)
                 metadata.extend([f"PDF Pg {i+1}"] * len(p_chunks))
+    # PPT parsing logic
     elif uploaded_file.name.lower().endswith(('.ppt', '.pptx')):
         prs = Presentation(uploaded_file)
         for i, slide in enumerate(prs.slides):
@@ -84,6 +86,7 @@ def process_docs(uploaded_file):
                 chunks.extend(s_chunks)
                 metadata.extend([f"PPT Slide {i+1}"] * len(s_chunks))
     
+    # Vector indexing
     if chunks:
         em = get_embed_model()
         embeddings = em.encode(chunks)
@@ -97,18 +100,20 @@ def process_docs(uploaded_file):
 with st.sidebar:
     st.header("⚙️ Settings")
     
-    # UPDATED MODEL LIST: Using verified Groq model IDs as of March 2026
+    # UPDATED: Verified Active Model IDs for Groq as of March 2026
     model_choice = st.selectbox("Select Brain:", [
         "llama-3.3-70b-versatile", 
         "meta-llama/llama-4-scout-17b-16e-instruct", 
-        "deepseek-r1-distill-llama-70b"  # FIXED ACTIVE ID
+        "deepseek-r1-distill-llama-70b-v2" # Verified replacement
     ])
     
-    st.info("💡 **Model Guide:**\n- **Llama 3.3:** Best for PDFs & PPTs\n- **Llama 4:** Best for Vision\n- **DeepSeek:** Advanced Logic/Math")
+    # Vertical Guide
+    st.info("💡 **Model Guide:**\n- **Llama 3.3:** Best for PDFs & PPTs\n- **Llama 4:** Vision/Images\n- **DeepSeek:** Advanced Logic/Math")
     
     voice_on = st.toggle("🔊 Auto-Play AI Voice", value=True)
     st.divider()
     
+    # Download Chat History logic
     if st.session_state.messages:
         chat_text = "\n\n".join([f"{m['role'].upper()}: {m['content']}" for m in st.session_state.messages])
         st.download_button("📥 Download Chat History", data=chat_text, file_name="mahi_chat.txt")
@@ -135,15 +140,18 @@ if prompt_data:
     user_text = prompt_data.text or ""
     current_files = []
 
+    # Whisper transcription
     if prompt_data.audio:
         with st.spinner("🎤 Transcribing..."):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-                tmp.write(prompt_data.audio.getvalue()); tmp_path = tmp.name
+                tmp.write(prompt_data.audio.getvalue())
+                tmp_path = tmp.name
             with open(tmp_path, "rb") as af:
                 tr = client.audio.transcriptions.create(file=af, model="whisper-large-v3")
                 user_text = tr.text
             os.remove(tmp_path)
 
+    # File processing loop
     if prompt_data.files:
         for f in prompt_data.files:
             if f.name.lower().endswith(('.pdf', '.pptx', '.ppt')):
@@ -160,7 +168,7 @@ if prompt_data:
         st.session_state.messages.append(new_msg)
         st.rerun()
 
-# --- 7. RESPONSE GENERATION ---
+# --- 7. ASSISTANT RESPONSE GENERATION ---
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
     last_msg = st.session_state.messages[-1]
     query = last_msg["content"]
@@ -171,7 +179,7 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         D, I = st.session_state.vector_store["index"].search(np.array(qv).astype('float32'), k=5)
         context = "\n".join([st.session_state.vector_store["chunks"][i] for i in I[0]])
 
-    api_messages = [{"role": "system", "content": "You are Mahi's AI. Use context and history for your answers."}]
+    api_messages = [{"role": "system", "content": "You are Mahi's AI. Use provided context and history for your answers."}]
     for m in st.session_state.messages[-6:-1]: 
         api_messages.append({"role": m["role"], "content": m["content"]})
 
@@ -189,17 +197,22 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
     with st.chat_message("assistant"):
         try:
             stream = client.chat.completions.create(model=active_model, messages=api_messages, stream=True)
-            resp = st.write_stream(c.choices[0].delta.content for c in stream if c.choices[0].delta.content)
+            def parse(s):
+                for c in s:
+                    if c.choices[0].delta.content: yield c.choices[0].delta.content
+            
+            resp = st.write_stream(parse(stream))
             st.session_state.messages.append({"role": "assistant", "content": resp})
             st.session_state.image_list = [] 
             
+            # Talk-Back logic
             if voice_on and resp:
                 with st.spinner("🔊 Speaking..."):
-                    audio_bytes = text_to_audio(resp, language='en')
-                    st.session_state.last_audio = audio_bytes 
-                    auto_play(audio_bytes)
+                    auto_play(text_to_audio(resp, language='en'))
+            
             st.rerun()
-        except Exception as e: st.error(f"Error: {e}")
+        except Exception as e:
+            st.error(f"Error during generation: {e}")
 
 # Audio re-trigger to handle browser policies
 if st.session_state.last_audio:
