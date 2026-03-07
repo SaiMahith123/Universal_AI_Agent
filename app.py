@@ -74,7 +74,6 @@ with st.sidebar:
     st.header("⚙️ Settings")
     model_choice = st.selectbox("Select Brain:", ["llama-3.3-70b-versatile", "meta-llama/llama-4-scout-17b-16e-instruct", "deepseek-r1-distill-llama-70b"])
     
-    # VERTICAL GUIDE - LINE BY LINE
     st.info("""
     💡 **Model Guide:**
     - **Llama 3.3:** Best for PDFs & PPTs
@@ -82,23 +81,19 @@ with st.sidebar:
     - **DeepSeek:** Best for Complex Logic
     """)
     
-    voice_on = st.toggle("🔊 Auto-Play AI Voice", value=False)
-    
+    # Critical for "Talking Back"
+    voice_on = st.toggle("🔊 Auto-Play AI Voice", value=True) 
     st.divider()
     
-    # DOWNLOAD HISTORY BUTTON
     if st.session_state.messages:
-        chat_text = ""
-        for m in st.session_state.messages:
-            chat_text += f"{m['role'].upper()}: {m['content']}\n\n"
-        st.download_button("📥 Download Chat History", data=chat_text, file_name="mahi_ai_chat.txt")
+        chat_text = "\n\n".join([f"{m['role'].upper()}: {m['content']}" for m in st.session_state.messages])
+        st.download_button("📥 Download Chat History", data=chat_text, file_name="mahi_chat.txt")
 
     if st.button("🗑️ Clear Chat"):
         st.session_state.messages = []
         st.session_state.vector_store = None
         st.session_state.image_list = []
         st.rerun()
-        
     st.caption("Developed by T Sai Mahit | B.E in AI-ML (2021-25)")
 
 # DISPLAY CHAT HISTORY
@@ -111,13 +106,25 @@ for msg in st.session_state.messages:
                     st.image(base64.b64decode(f_info['data']), width=250)
         st.markdown(msg["content"])
 
-# --- INPUT & MULTIMODAL LOGIC ---
+# --- INPUT & VOICE LOGIC ---
 prompt_data = st.chat_input("Ask, Upload Docs/Images...", accept_file=True, accept_audio=True)
 
 if prompt_data:
     user_text = prompt_data.text or ""
     current_files = []
 
+    # Whisper Transcription
+    if prompt_data.audio:
+        with st.spinner("🎤 Transcribing..."):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                tmp.write(prompt_data.audio.getvalue())
+                tmp_path = tmp.name
+            with open(tmp_path, "rb") as af:
+                tr = client.audio.transcriptions.create(file=af, model="whisper-large-v3")
+                user_text = tr.text
+            os.remove(tmp_path)
+
+    # File Processing
     if prompt_data.files:
         for f in prompt_data.files:
             if f.name.lower().endswith(('.pdf', '.pptx', '.ppt')):
@@ -131,39 +138,40 @@ if prompt_data:
     new_msg = {"role": "user", "content": user_text}
     if current_files: 
         new_msg["files"] = current_files
-    st.session_state.messages.append(new_msg)
-    st.rerun()
+    
+    if user_text or current_files:
+        st.session_state.messages.append(new_msg)
+        st.rerun()
 
-# 2. Response Generation
+# --- RESPONSE GENERATION (Talk Back Feature) ---
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
     last_msg = st.session_state.messages[-1]
-    user_text = last_msg["content"]
+    query = last_msg["content"]
 
     # RAG Retrieval
     context = ""
-    if st.session_state.vector_store and user_text:
-        qv = get_embed_model().encode([user_text])
+    if st.session_state.vector_store and query:
+        qv = get_embed_model().encode([query])
         D, I = st.session_state.vector_store["index"].search(np.array(qv).astype('float32'), k=5)
         context = "\n".join([st.session_state.vector_store["chunks"][i] for i in I[0]])
 
-    # SLIDING WINDOW MEMORY
-    api_messages = [{"role": "system", "content": "You are Mahi's AI. Use provided context and history to answer."}]
+    # MEMORY & ROUTING
+    api_messages = [{"role": "system", "content": "You are Mahi's AI. Use context and history to answer clearly and concisely."}]
     for m in st.session_state.messages[-6:-1]: 
         api_messages.append({"role": m["role"], "content": m["content"]})
 
-    # MULTIMODAL ROUTING
     if st.session_state.image_list:
         active_model = "meta-llama/llama-4-scout-17b-16e-instruct"
-        content_payload = [{"type": "text", "text": f"Instruction: {user_text if user_text else 'Compare or analyze these images.'}"}]
+        content_payload = [{"type": "text", "text": f"Instruction: {query if query else 'Analyze these images.'}"}]
         for img in st.session_state.image_list:
             content_payload.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img['data']}"}})
         api_messages.append({"role": "user", "content": content_payload})
     else:
         active_model = model_choice
-        full_p = f"Context:\n{context}\n\nQuestion: {user_text}" if context else user_text
+        full_p = f"Context:\n{context}\n\nQuestion: {query}" if context else query
         api_messages.append({"role": "user", "content": full_p})
 
-    # GENERATE
+    # GENERATE & AUTO-PLAY VOICE
     with st.chat_message("assistant"):
         try:
             stream = client.chat.completions.create(model=active_model, messages=api_messages, stream=True)
@@ -171,10 +179,15 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
                 for c in s:
                     if c.choices[0].delta.content: yield c.choices[0].delta.content
             resp = st.write_stream(parse(stream))
+            
             st.session_state.messages.append({"role": "assistant", "content": resp})
-            st.session_state.image_list = [] # Reset images for next turn
-            if voice_on: 
-                auto_play(text_to_audio(resp))
+            st.session_state.image_list = [] 
+            
+            # THE TALK BACK FEATURE
+            if voice_on and resp:
+                with st.spinner("🔊 Generating Audio..."):
+                    audio_data = text_to_audio(resp, language='en')
+                    auto_play(audio_data)
+            
             st.rerun()
-        except Exception as e: 
-            st.error(f"Error: {e}")
+        except Exception as e: st.error(f"Error: {e}")
