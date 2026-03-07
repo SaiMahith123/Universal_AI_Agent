@@ -23,36 +23,35 @@ st.markdown("""
 
 st.title("🤖 Mahi's Universal Groq AI")
 
+# API Initialization
 if "GROQ_API_KEY" in st.secrets:
     client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 else:
-    st.error("❌ GROQ_API_KEY missing!")
+    st.error("❌ GROQ_API_KEY missing in Secrets!")
     st.stop()
 
+# State Management
 if "messages" not in st.session_state: st.session_state.messages = []
 if "vector_store" not in st.session_state: st.session_state.vector_store = None
 if "file_context" not in st.session_state: st.session_state.file_context = {"image_b64": None}
 
 @st.cache_resource
-def get_embed_model(): return SentenceTransformer('all-MiniLM-L6-v2')
+def get_embed_model(): 
+    return SentenceTransformer('all-MiniLM-L6-v2')
 
-# --- IMPROVED PDF PROCESSING FOR LARGE DOCS ---
+# --- PDF PROCESSING LOGIC ---
 def process_pdf(uploaded_file):
     reader = PyPDF2.PdfReader(uploaded_file)
     chunks = []
     metadata = []
-    
     for i, page in enumerate(reader.pages):
         text = page.extract_text()
         if text:
-            # Overlapping chunks (1000 size, 200 overlap) ensures context isn't lost at the edges
-            stride = 800 
-            size = 1000
-            for j in range(0, len(text), stride):
-                chunk = text[j:j+size]
-                chunks.append(chunk)
-                metadata.append(i + 1) # Track page number
-                
+            # Recursive overlap (1000 size, 200 overlap) for large docs
+            page_chunks = [text[j:j+1000] for j in range(0, len(text), 800)]
+            chunks.extend(page_chunks)
+            metadata.extend([i + 1] * len(page_chunks)) 
+            
     if chunks:
         em = get_embed_model()
         embeddings = em.encode(chunks)
@@ -65,14 +64,15 @@ def process_pdf(uploaded_file):
 # --- SIDEBAR UI ---
 with st.sidebar:
     st.header("⚙️ Settings")
-    model_choice = st.selectbox("Select Brain:", ["llama-3.3-70b-versatile", "meta-llama/llama-4-scout-17b-16e-instruct", "deepseek-r1-distill-llama-70b"])
-    st.info("💡 **Llama 3.3:** Large PDFs | **Llama 4:** Images | **DeepSeek:** Logic")
+    model_choice = st.selectbox("Select Brain:", 
+                                ["llama-3.3-70b-versatile", 
+                                 "meta-llama/llama-4-scout-17b-16e-instruct", 
+                                 "deepseek-r1-distill-llama-70b"])
+    
+    st.info("💡 **Llama 3.3:** PDFs | **Llama 4:** Images | **DeepSeek:** Logic")
     voice_on = st.toggle("🔊 Auto-Play AI Voice", value=False)
     
     st.divider()
-    if st.session_state.vector_store:
-        st.success(f"📖 {len(st.session_state.vector_store['chunks'])} Document Chunks Indexed")
-    
     if st.button("🗑️ Clear Chat"):
         st.session_state.messages = []
         st.session_state.vector_store = None
@@ -83,7 +83,8 @@ with st.sidebar:
 
 # --- CHAT DISPLAY ---
 for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]): st.markdown(msg["content"])
+    with st.chat_message(msg["role"]): 
+        st.markdown(msg["content"])
 
 # --- INPUT HANDLING ---
 prompt_data = st.chat_input("Ask, Upload PDF/Image, or Record...", accept_file=True, accept_audio=True)
@@ -91,7 +92,7 @@ prompt_data = st.chat_input("Ask, Upload PDF/Image, or Record...", accept_file=T
 if prompt_data:
     user_text = prompt_data.text or ""
     
-    # Audio Processing
+    # Audio Processing (Whisper)
     if prompt_data.audio:
         with st.spinner("🎤 Transcribing..."):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
@@ -102,61 +103,72 @@ if prompt_data:
                 user_text = tr.text
             os.remove(tmp_path)
 
-    # File Processing (PDF/Images)
+    # File Processing
     if prompt_data.files:
         for f in prompt_data.files:
             if f.type == "application/pdf":
-                with st.spinner("📂 Deep-Indexing PDF..."):
+                with st.spinner("📂 Indexing PDF..."): 
                     process_pdf(f)
             elif "image" in f.type:
                 st.session_state.file_context["image_b64"] = base64.b64encode(f.getvalue()).decode('utf-8')
 
     if user_text or st.session_state.file_context["image_b64"]:
-        st.session_state.messages.append({"role": "user", "content": user_text})
-        with st.chat_message("user"): st.markdown(user_text)
+        # Show User Message
+        with st.chat_message("user"): 
+            st.markdown(user_text)
 
-        # Retrieval Logic (RAG)
+        # RAG Retrieval
         context_text = ""
         sources = []
         if st.session_state.vector_store and user_text:
             qv = get_embed_model().encode([user_text])
-            # Increased 'k' to 5 to get more context for large PDFs
             D, I = st.session_state.vector_store["index"].search(np.array(qv).astype('float32'), k=5)
             for i in I[0]:
-                context_text += f"---\n{st.session_state.vector_store['chunks'][i]}\n"
+                context_text += st.session_state.vector_store["chunks"][i] + "\n"
                 sources.append(st.session_state.vector_store["pages"][i])
 
-        # Model Selection & Prompt Building
+        # --- CONVERSATION MEMORY LOGIC ---
+        # We start with a system prompt and append the last 6 messages
+        history_msgs = [{"role": "system", "content": "You are Mahi's AI. Use the provided context and history to answer accurately."}]
+        
+        # Add past interactions to give the AI "Memory"
+        for m in st.session_state.messages[-6:]: 
+            history_msgs.append({"role": m["role"], "content": m["content"]})
+
+        # Set active model and current content
         active_model = model_choice
         if st.session_state.file_context["image_b64"]:
             active_model = "meta-llama/llama-4-scout-17b-16e-instruct"
-            msgs = [{"role": "user", "content": [
-                {"type": "text", "text": user_text if user_text else "Describe this image"},
+            current_prompt = [
+                {"type": "text", "text": user_text if user_text else "Analyze this image."},
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{st.session_state.file_context['image_b64']}"}}
-            ]}]
+            ]
         else:
-            page_list = sorted(list(set(sources)))
-            src_note = f"\n\n(Information found on Pages: {page_list})" if page_list else ""
-            
-            # System instructions embedded in the user prompt for better adherence
-            full_p = f"Instructions: Use the provided context to answer. If not found, use your general knowledge but mention it.\n\nContext:\n{context_text}\n\nQuestion: {user_text}{src_note}"
-            msgs = [{"role": "user", "content": full_p}]
+            page_info = f"(Found on Pages: {list(set(sources))})" if sources else ""
+            current_prompt = f"PDF Context:\n{context_text}\n\nUser Question: {user_text}\n{page_info}"
 
-        # AI Generation
+        # Add current user prompt to the list for the API
+        history_msgs.append({"role": "user", "content": current_prompt})
+        
+        # Finally, save the user text to state for display
+        st.session_state.messages.append({"role": "user", "content": user_text})
+
+        # --- ASSISTANT RESPONSE ---
         with st.chat_message("assistant"):
             try:
-                stream = client.chat.completions.create(model=active_model, messages=msgs, stream=True)
+                stream = client.chat.completions.create(model=active_model, messages=history_msgs, stream=True)
+                
                 def parse(s):
                     for c in s:
                         if c.choices[0].delta.content: yield c.choices[0].delta.content
                 
-                resp = st.write_stream(parse(stream))
-                st.session_state.messages.append({"role": "assistant", "content": resp})
+                full_resp = st.write_stream(parse(stream))
+                st.session_state.messages.append({"role": "assistant", "content": full_resp})
                 
-                # Clean image context after use
+                # Reset image context so it doesn't linger
                 st.session_state.file_context["image_b64"] = None
                 
                 if voice_on:
-                    auto_play(text_to_audio(resp, language='en'))
+                    auto_play(text_to_audio(full_resp, language='en'))
             except Exception as e:
                 st.error(f"Error: {str(e)}")
