@@ -120,7 +120,6 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         if "files" in msg:
             for f_info in msg["files"]:
-                # FIXED: f-string syntax for file cards
                 st.markdown(f'<div class="file-card">📄 <b>{f_info["name"]}</b></div>', unsafe_allow_html=True)
                 if f_info['type'] == "Image":
                     st.image(base64.b64decode(f_info['data']), width=280)
@@ -194,4 +193,20 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
     # Generate, Stream, and Talk-Back
     with st.chat_message("assistant"):
         try:
-            stream = client.chat.complet
+            stream = client.chat.completions.create(model=active_model, messages=api_messages, stream=True)
+            def parse(s):
+                for c in s:
+                    if c.choices[0].delta.content: yield c.choices[0].delta.content
+            
+            resp = st.write_stream(parse(stream))
+            st.session_state.messages.append({"role": "assistant", "content": resp})
+            st.session_state.image_list = [] 
+            
+            # Talk-Back logic
+            if voice_on and resp:
+                with st.spinner("🔊 Speaking..."):
+                    auto_play(text_to_audio(resp, language='en'))
+            
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error during generation: {e}")
