@@ -1,9 +1,11 @@
-streamlit>=1.53.0
-groq
-pypdf
-faiss-cpu
-sentence-transformers
-python-dotenv
-audioop-lts
-openai
+streamlit>=1.31.0
+groq>=0.4.2
+pypdf>=4.0.0
+python-pptx
+faiss-cpu>=1.7.4
+sentence-transformers>=2.5.1
+python-dotenv>=1.0.1
+audioop-lts; python_version >= "3.13"
+openai>=1.12.0
 streamlit-TTS
+numpy<2.0.0
