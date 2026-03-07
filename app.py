@@ -10,14 +10,14 @@ import tempfile
 import os
 from streamlit_TTS import auto_play, text_to_audio
 
-# --- 1. CONFIGURATION & CUSTOM STYLING ---
+# --- 1. CONFIGURATION & STYLING ---
 st.set_page_config(
     page_title="Mahi's Universal Groq AI", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for UI layout and visual cards
+# Persistent CSS for the right-aligned layout and file cards
 st.markdown("""
     <style>
         .stApp { flex-direction: row-reverse; }
@@ -43,69 +43,73 @@ st.markdown("""
 
 st.title("🤖 Mahi's Universal Groq AI")
 
-# --- 2. API & STATE INITIALIZATION ---
+# --- 2. INITIALIZATION ---
 if "GROQ_API_KEY" in st.secrets:
     client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 else:
     st.error("❌ GROQ_API_KEY missing in Secrets!")
     st.stop()
 
-# Persistent state to ensure memory and model switching work
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "vector_store" not in st.session_state:
-    st.session_state.vector_store = None
-if "image_list" not in st.session_state:
-    st.session_state.image_list = []
+# Persistent state variables
+if "messages" not in st.session_state: st.session_state.messages = []
+if "vector_store" not in st.session_state: st.session_state.vector_store = None
+if "image_list" not in st.session_state: st.session_state.image_list = []
+if "last_audio" not in st.session_state: st.session_state.last_audio = None
 
 @st.cache_resource
-def get_embed_model():
-    return SentenceTransformer('all-MiniLM-L6-v2')
+def get_embed_model(): return SentenceTransformer('all-MiniLM-L6-v2')
 
-# --- 3. MULTI-DOCUMENT PROCESSING (PDF & PPT) ---
+# --- 3. DETAILED DOCUMENT PROCESSING ---
 def process_docs(uploaded_file):
-    chunks, metadata = [], []
-    # PDF parsing logic
+    chunks = []
+    metadata = []
+    
+    # Expanded PDF parsing
     if uploaded_file.name.lower().endswith('.pdf'):
         reader = PyPDF2.PdfReader(uploaded_file)
         for i, page in enumerate(reader.pages):
             text = page.extract_text()
             if text:
-                p_chunks = [text[j:j+1000] for j in range(0, len(text), 800)]
-                chunks.extend(p_chunks)
-                metadata.extend([f"PDF Pg {i+1}"] * len(p_chunks))
-    # PPT parsing logic
+                # 1000 char chunks with 200 char overlap
+                for j in range(0, len(text), 800):
+                    chunk = text[j:j+1000]
+                    chunks.append(chunk)
+                    metadata.append(f"PDF Page {i+1}")
+    
+    # Expanded PPT parsing
     elif uploaded_file.name.lower().endswith(('.ppt', '.pptx')):
         prs = Presentation(uploaded_file)
         for i, slide in enumerate(prs.slides):
-            text = " ".join([sh.text for sh in slide.shapes if hasattr(sh, "text")])
-            if text:
-                s_chunks = [text[j:j+1000] for j in range(0, len(text), 800)]
-                chunks.extend(s_chunks)
-                metadata.extend([f"PPT Slide {i+1}"] * len(s_chunks))
+            slide_text = ""
+            for shape in slide.shapes:
+                if hasattr(shape, "text"):
+                    slide_text += shape.text + " "
+            if slide_text:
+                for j in range(0, len(slide_text), 800):
+                    chunk = slide_text[j:j+1000]
+                    chunks.append(chunk)
+                    metadata.append(f"PPT Slide {i+1}")
     
-    # Vector indexing
+    # FAISS Vector Indexing
     if chunks:
         em = get_embed_model()
         embeddings = em.encode(chunks)
-        idx = faiss.IndexFlatL2(embeddings.shape[1])
-        idx.add(np.array(embeddings).astype('float32'))
-        st.session_state.vector_store = {"index": idx, "chunks": chunks, "sources": metadata}
+        index = faiss.IndexFlatL2(embeddings.shape[1])
+        index.add(np.array(embeddings).astype('float32'))
+        st.session_state.vector_store = {"index": index, "chunks": chunks, "sources": metadata}
         return True
     return False
 
-# --- 4. SIDEBAR INTERFACE ---
+# --- 4. SIDEBAR ---
 with st.sidebar:
     st.header("⚙️ Settings")
     model_choice = st.selectbox("Select Brain:", ["llama-3.3-70b-versatile", "meta-llama/llama-4-scout-17b-16e-instruct", "deepseek-r1-distill-llama-70b"])
     
-    # Vertical Guide
-    st.info("💡 **Model Guide:**\n- **Llama 3.3:** Best for PDFs & PPTs\n- **Llama 4:** Vision/Images\n- **DeepSeek:** Logic")
+    st.info("💡 **Model Guide:**\n- **Llama 3.3:** Best for PDFs & PPTs\n- **Llama 4:** Vision/Images\n- **DeepSeek:** Logic/Math")
     
     voice_on = st.toggle("🔊 Auto-Play AI Voice", value=True)
     st.divider()
     
-    # Download Chat History logic
     if st.session_state.messages:
         chat_text = "\n\n".join([f"{m['role'].upper()}: {m['content']}" for m in st.session_state.messages])
         st.download_button("📥 Download Chat History", data=chat_text, file_name="mahi_chat.txt")
@@ -125,60 +129,56 @@ for msg in st.session_state.messages:
                     st.image(base64.b64decode(f_info['data']), width=280)
         st.markdown(msg["content"])
 
-# --- 6. INPUT HANDLING & VOICE TRANSCRIPTION ---
+# --- 6. INPUT & VOICE HANDLING ---
 prompt_data = st.chat_input("Ask, Upload Docs/Images...", accept_file=True, accept_audio=True)
 
 if prompt_data:
     user_text = prompt_data.text or ""
     current_files = []
 
-    # Whisper transcription
+    # Voice Transcription
     if prompt_data.audio:
         with st.spinner("🎤 Transcribing..."):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-                tmp.write(prompt_data.audio.getvalue())
-                tmp_path = tmp.name
+                tmp.write(prompt_data.audio.getvalue()); tmp_path = tmp.name
             with open(tmp_path, "rb") as af:
                 tr = client.audio.transcriptions.create(file=af, model="whisper-large-v3")
                 user_text = tr.text
             os.remove(tmp_path)
 
-    # File processing loop
+    # File Processing
     if prompt_data.files:
         for f in prompt_data.files:
             if f.name.lower().endswith(('.pdf', '.pptx', '.ppt')):
                 process_docs(f)
                 current_files.append({"name": f.name, "type": "Document"})
-            elif any(ext in f.type for ext in ["image/png", "image/jpeg"]):
+            elif any(it in f.type for it in ["image/png", "image/jpeg"]):
                 img_b64 = base64.b64encode(f.getvalue()).decode('utf-8')
                 st.session_state.image_list.append({"name": f.name, "data": img_b64})
                 current_files.append({"name": f.name, "type": "Image", "data": img_b64})
 
-    # Record message in history and refresh UI
     if user_text or current_files:
         new_msg = {"role": "user", "content": user_text}
         if current_files: new_msg["files"] = current_files
-        st.session_state.messages.append(new_msg)
-        st.rerun()
+        st.session_state.messages.append(new_msg); st.rerun()
 
-# --- 7. ASSISTANT RESPONSE GENERATION ---
+# --- 7. RESPONSE GENERATION & TALK-BACK ---
 if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
-    last_msg = st.session_state.messages[-1]
-    query = last_msg["content"]
-
-    # RAG Retrieval from documents
+    last_msg = st.session_state.messages[-1]; query = last_msg["content"]
+    
+    # RAG Retrieval
     context = ""
     if st.session_state.vector_store and query:
         qv = get_embed_model().encode([query])
         D, I = st.session_state.vector_store["index"].search(np.array(qv).astype('float32'), k=5)
         context = "\n".join([st.session_state.vector_store["chunks"][i] for i in I[0]])
 
-    # Contextual Memory (Sliding Window)
-    api_messages = [{"role": "system", "content": "You are Mahi's AI. Use provided context and history for your answers."}]
+    # Memory Buffer
+    api_messages = [{"role": "system", "content": "You are Mahi's AI. Use context and history to answer."}]
     for m in st.session_state.messages[-6:-1]: 
         api_messages.append({"role": m["role"], "content": m["content"]})
 
-    # Routing: Vision vs Text
+    # Vision Routing
     if st.session_state.image_list:
         active_model = "meta-llama/llama-4-scout-17b-16e-instruct"
         content_payload = [{"type": "text", "text": f"Instruction: {query if query else 'Analyze images.'}"}]
@@ -190,23 +190,23 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
         full_p = f"Context:\n{context}\n\nQuestion: {query}" if context else query
         api_messages.append({"role": "user", "content": full_p})
 
-    # Generate, Stream, and Talk-Back
+    # Generate and Speak
     with st.chat_message("assistant"):
         try:
             stream = client.chat.completions.create(model=active_model, messages=api_messages, stream=True)
-            def parse(s):
-                for c in s:
-                    if c.choices[0].delta.content: yield c.choices[0].delta.content
-            
-            resp = st.write_stream(parse(stream))
+            resp = st.write_stream(c.choices[0].delta.content for c in stream if c.choices[0].delta.content)
             st.session_state.messages.append({"role": "assistant", "content": resp})
             st.session_state.image_list = [] 
             
-            # Talk-Back logic
             if voice_on and resp:
-                with st.spinner("🔊 Speaking..."):
-                    auto_play(text_to_audio(resp, language='en'))
-            
+                with st.spinner("🔊 Generating Audio..."):
+                    audio_bytes = text_to_audio(resp, language='en')
+                    st.session_state.last_audio = audio_bytes 
+                    auto_play(audio_bytes)
             st.rerun()
-        except Exception as e:
-            st.error(f"Error during generation: {e}")
+        except Exception as e: st.error(f"Error: {e}")
+
+# High-Reliability Audio Playback
+if st.session_state.last_audio:
+    auto_play(st.session_state.last_audio)
+    st.session_state.last_audio = None
