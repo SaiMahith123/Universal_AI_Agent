@@ -7,32 +7,16 @@ import faiss
 import numpy as np
 import tempfile
 import os
+from streamlit_TTS import auto_play, text_to_audio
 
 st.set_page_config(page_title="Mahi's Universal Groq AI", layout="wide", initial_sidebar_state="expanded")
 
-# --- GEMINI UI CSS: Right Sidebar & Sticky Bottom ---
 st.markdown("""
     <style>
-        /* Flip Layout: Sidebar to Right */
-        .stApp {
-            flex-direction: row-reverse;
-        }
-        [data-testid="stSidebar"] {
-            left: auto !important;
-            right: 0 !important;
-            border-left: 1px solid rgba(250, 250, 250, 0.1);
-        }
-        /* Fix Chat Input at bottom and center it */
-        .stChatInputContainer {
-            position: fixed;
-            bottom: 20px;
-            z-index: 1000;
-            padding: 10px;
-        }
-        /* Add padding at bottom so text doesn't hide behind chat bar */
-        .main .block-container {
-            padding-bottom: 120px;
-        }
+        .stApp { flex-direction: row-reverse; }
+        [data-testid="stSidebar"] { left: auto !important; right: 0 !important; border-left: 1px solid rgba(250, 250, 250, 0.1); }
+        .stChatInputContainer { position: fixed; bottom: 20px; z-index: 1000; }
+        .main .block-container { padding-bottom: 150px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -44,71 +28,47 @@ else:
     st.error("❌ GROQ_API_KEY missing!")
     st.stop()
 
-# Persistent Session Data
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "vector_store" not in st.session_state:
-    st.session_state.vector_store = None
-if "file_context" not in st.session_state:
-    st.session_state.file_context = {"text": "", "image_b64": None}
+if "messages" not in st.session_state: st.session_state.messages = []
+if "vector_store" not in st.session_state: st.session_state.vector_store = None
+if "file_context" not in st.session_state: st.session_state.file_context = {"image_b64": None}
 
 @st.cache_resource
-def get_embed_model():
-    return SentenceTransformer('all-MiniLM-L6-v2')
+def get_embed_model(): return SentenceTransformer('all-MiniLM-L6-v2')
 
-def process_file(uploaded_file):
-    if uploaded_file.type == "application/pdf":
-        reader = PyPDF2.PdfReader(uploaded_file)
-        text = " ".join([p.extract_text() for p in reader.pages if p.extract_text()])
-        chunks = [text[i:i+1000] for i in range(0, len(text), 1000)]
-        em = get_embed_model()
-        embeddings = em.encode(chunks)
-        idx = faiss.IndexFlatL2(embeddings.shape[1])
-        idx.add(np.array(embeddings).astype('float32'))
-        st.session_state.vector_store = {"index": idx, "chunks": chunks}
-        return {"text": text[:2000], "image_b64": None}
-    elif "image" in uploaded_file.type:
-        b64 = base64.b64encode(uploaded_file.getvalue()).decode('utf-8')
-        return {"text": "", "image_b64": b64}
-    return None
+def process_pdf(uploaded_file):
+    reader = PyPDF2.PdfReader(uploaded_file)
+    chunks = []
+    metadata = []
+    for i, page in enumerate(reader.pages):
+        text = page.extract_text()
+        if text:
+           
+            page_chunks = [text[j:j+1000] for j in range(0, len(text), 1000)]
+            chunks.extend(page_chunks)
+            metadata.extend([i + 1] * len(page_chunks)) 
+            
+    em = get_embed_model()
+    embeddings = em.encode(chunks)
+    idx = faiss.IndexFlatL2(embeddings.shape[1])
+    idx.add(np.array(embeddings).astype('float32'))
+    st.session_state.vector_store = {"index": idx, "chunks": chunks, "pages": metadata}
 
-# --- RIGHT SIDEBAR: Stacked Settings ---
 with st.sidebar:
     st.header("⚙️ Settings")
-    
-    # Model on top
-    model_choice = st.selectbox(
-        "Select AI Brain:",
-        ["llama-3.3-70b-versatile", "meta-llama/llama-4-scout-17b-16e-instruct", "deepseek-r1-distill-llama-70b"]
-    )
-    
-    # Note/Guide below
-    st.info("""
-    💡 **Quick Guide:**
-    - **Llama 3.3:** Best for PDFs. 
-    - **Llama 4 Scout:** Best for Images. 
-    - **DeepSeek R1:** Best for Logic.
-    """)
-    
+    model_choice = st.selectbox("Select Brain:", ["llama-3.3-70b-versatile", "meta-llama/llama-4-scout-17b-16e-instruct", "deepseek-r1-distill-llama-70b"])
+    st.info("💡 **Llama 3.3:** PDFs | **Llama 4:** Images | **DeepSeek:** Logic")
+    voice_on = st.toggle("🔊 Auto-Play AI Voice", value=False)
     st.divider()
     if st.button("🗑️ Clear Chat"):
         st.session_state.messages = []
         st.session_state.vector_store = None
         st.rerun()
-    st.caption("Developed by T Sai Mahit | B.Tech 2025")
+    st.caption("Developed by T Sai Mahit | B.E in AI-ML (2021-25)")
 
-# --- CHAT DISPLAY ---
 for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+    with st.chat_message(msg["role"]): st.markdown(msg["content"])
 
-# --- STICKY CHAT INPUT ---
-prompt_data = st.chat_input(
-    "Ask, Upload, or Record...", 
-    accept_file=True, 
-    file_type=["pdf", "jpg", "png", "jpeg"], 
-    accept_audio=True
-)
+prompt_data = st.chat_input("Ask, Upload PDF/Image, or Record...", accept_file=True, accept_audio=True)
 
 if prompt_data:
     user_text = prompt_data.text or ""
@@ -124,26 +84,31 @@ if prompt_data:
             os.remove(tmp_path)
 
     if prompt_data.files:
-        with st.spinner("📂 Indexing..."):
-            st.session_state.file_context = process_file(prompt_data.files[0])
+        f = prompt_data.files[0]
+        if f.type == "application/pdf":
+            with st.spinner("📂 Indexing PDF Pages..."): process_pdf(f)
+        elif "image" in f.type:
+            st.session_state.file_context["image_b64"] = base64.b64encode(f.getvalue()).decode('utf-8')
 
     st.session_state.messages.append({"role": "user", "content": user_text})
-    with st.chat_message("user"):
-        st.markdown(user_text)
+    with st.chat_message("user"): st.markdown(user_text)
 
-    # RAG Retrieval
-    context = ""
+    context_text = ""
+    sources = []
     if st.session_state.vector_store and user_text:
         qv = get_embed_model().encode([user_text])
-        _, I = st.session_state.vector_store["index"].search(np.array(qv).astype('float32'), k=3)
-        context = "\n".join([st.session_state.vector_store["chunks"][i] for i in I[0]])
-
+        D, I = st.session_state.vector_store["index"].search(np.array(qv).astype('float32'), k=3)
+        for i in I[0]:
+            context_text += st.session_state.vector_store["chunks"][i] + "\n"
+            sources.append(st.session_state.vector_store["pages"][i])
+   
     active_model = model_choice
     if st.session_state.file_context["image_b64"]:
         active_model = "meta-llama/llama-4-scout-17b-16e-instruct"
         msgs = [{"role": "user", "content": [{"type": "text", "text": user_text}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{st.session_state.file_context['image_b64']}"}}]}]
     else:
-        full_p = f"Context: {context}\n\nUser: {user_text}" if context else user_text
+        src_note = f"\n(Relevant Info found on Pages: {list(set(sources))})" if sources else ""
+        full_p = f"Context: {context_text}\n\nQuestion: {user_text}\n{src_note}"
         msgs = [{"role": "user", "content": full_p}]
 
     with st.chat_message("assistant"):
@@ -154,5 +119,10 @@ if prompt_data:
                     if c.choices[0].delta.content: yield c.choices[0].delta.content
             resp = st.write_stream(parse(stream))
             st.session_state.messages.append({"role": "assistant", "content": resp})
+            
+            if voice_on:
+                audio_dict = text_to_audio(resp, language='en')
+                auto_play(audio_dict)
+                
         except Exception as e:
             st.error(f"Error: {str(e)}")
