@@ -3,5 +3,6 @@ groq
 pypdf
 faiss-cpu
 sentence-transformers
-streamlit-TTS
+python-dotenv
 audioop-lts
+streamlit-TTS
