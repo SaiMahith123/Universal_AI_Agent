@@ -1,3 +1,5 @@
-streamlit
+streamlit>=1.53.0
 groq
 pypdf
+faiss-cpu
+sentence-transformers
