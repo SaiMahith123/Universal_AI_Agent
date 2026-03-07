@@ -102,4 +102,4 @@ if prompt_data:
 
     # 1. Process All Uploaded Files
     if prompt_data.files:
-        for f in prompt_data.files
+        for f in prompt_data.files:
