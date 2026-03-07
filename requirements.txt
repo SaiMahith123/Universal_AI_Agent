@@ -4,3 +4,4 @@ pypdf
 faiss-cpu
 sentence-transformers
 streamlit-TTS
+audioop-lts
