@@ -100,15 +100,16 @@ def process_docs(uploaded_file):
 with st.sidebar:
     st.header("⚙️ Settings")
     
-    # UPDATED: Verified Active Model IDs for Groq as of March 2026
+    # UPDATED: Verified Active IDs for Groq as of March 2026
     model_choice = st.selectbox("Select Brain:", [
         "llama-3.3-70b-versatile", 
         "meta-llama/llama-4-scout-17b-16e-instruct", 
-        "deepseek-r1-distill-llama-70b-v2" # Verified replacement
+        "gpt-oss-120b", # Groq's current reasoning recommendation
+        "deepseek-r1-70b" # Direct DeepSeek replacement
     ])
     
     # Vertical Guide
-    st.info("💡 **Model Guide:**\n- **Llama 3.3:** Best for PDFs & PPTs\n- **Llama 4:** Vision/Images\n- **DeepSeek:** Advanced Logic/Math")
+    st.info("💡 **Model Guide:**\n- **Llama 3.3:** Best for Docs\n- **Llama 4:** Best for Images\n- **GPT-OSS:** High Reasoning\n- **DeepSeek:** Logic/Math")
     
     voice_on = st.toggle("🔊 Auto-Play AI Voice", value=True)
     st.divider()
