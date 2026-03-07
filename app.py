@@ -72,7 +72,6 @@ def process_docs(uploaded_file):
         for i, page in enumerate(reader.pages):
             text = page.extract_text()
             if text:
-                # Sliding window chunking
                 p_chunks = [text[j:j+1000] for j in range(0, len(text), 800)]
                 chunks.extend(p_chunks)
                 metadata.extend([f"PDF Pg {i+1}"] * len(p_chunks))
@@ -98,14 +97,14 @@ def process_docs(uploaded_file):
 with st.sidebar:
     st.header("⚙️ Settings")
     
-    # UPDATED MODEL LIST: Replaced decommissioned DeepSeek
+    # UPDATED MODEL LIST: Using verified Groq model IDs as of March 2026
     model_choice = st.selectbox("Select Brain:", [
         "llama-3.3-70b-versatile", 
         "meta-llama/llama-4-scout-17b-16e-instruct", 
-        "deepseek-r1-distill-llama-70b-specdec" # Updated name
+        "deepseek-r1-distill-llama-70b"  # FIXED ACTIVE ID
     ])
     
-    st.info("💡 **Model Guide:**\n- **Llama 3.3:** PDFs & PPTs\n- **Llama 4:** Vision\n- **DeepSeek:** Advanced Logic")
+    st.info("💡 **Model Guide:**\n- **Llama 3.3:** Best for PDFs & PPTs\n- **Llama 4:** Best for Vision\n- **DeepSeek:** Advanced Logic/Math")
     
     voice_on = st.toggle("🔊 Auto-Play AI Voice", value=True)
     st.divider()
@@ -166,14 +165,12 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
     last_msg = st.session_state.messages[-1]
     query = last_msg["content"]
 
-    # RAG Retrieval
     context = ""
     if st.session_state.vector_store and query:
         qv = get_embed_model().encode([query])
         D, I = st.session_state.vector_store["index"].search(np.array(qv).astype('float32'), k=5)
         context = "\n".join([st.session_state.vector_store["chunks"][i] for i in I[0]])
 
-    # Memory Buffer (Sliding Window)
     api_messages = [{"role": "system", "content": "You are Mahi's AI. Use context and history for your answers."}]
     for m in st.session_state.messages[-6:-1]: 
         api_messages.append({"role": m["role"], "content": m["content"]})
@@ -196,7 +193,6 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
             st.session_state.messages.append({"role": "assistant", "content": resp})
             st.session_state.image_list = [] 
             
-            # Talk-Back Logic
             if voice_on and resp:
                 with st.spinner("🔊 Speaking..."):
                     audio_bytes = text_to_audio(resp, language='en')
@@ -205,7 +201,7 @@ if st.session_state.messages and st.session_state.messages[-1]["role"] == "user"
             st.rerun()
         except Exception as e: st.error(f"Error: {e}")
 
-# Re-trigger audio after rerun to prevent browser blocking
+# Audio re-trigger to handle browser policies
 if st.session_state.last_audio:
     auto_play(st.session_state.last_audio)
     st.session_state.last_audio = None
