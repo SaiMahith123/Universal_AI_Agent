@@ -9,14 +9,18 @@ import tempfile
 import os
 
 st.set_page_config(page_title="Mahi's Universal Groq AI", layout="wide")
+
+# Professional Header
 st.title("🤖 Mahi's Universal Groq AI")
+st.caption("Developed by T Sai Mahit | B.Tech 2025")
 
 if "GROQ_API_KEY" in st.secrets:
     client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 else:
-    st.error("❌ GROQ_API_KEY missing in Secrets!")
+    st.error("❌ GROQ_API_KEY missing!")
     st.stop()
 
+# Persistent Memory
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "vector_store" not in st.session_state:
@@ -31,85 +35,79 @@ def get_embed_model():
 def process_file(uploaded_file):
     if uploaded_file.type == "application/pdf":
         reader = PyPDF2.PdfReader(uploaded_file)
-        text = " ".join([page.extract_text() for page in reader.pages if page.extract_text()])
+        text = " ".join([p.extract_text() for p in reader.pages if p.extract_text()])
         chunks = [text[i:i+1000] for i in range(0, len(text), 1000)]
-        embed_model = get_embed_model()
-        embeddings = embed_model.encode(chunks)
-        index = faiss.IndexFlatL2(embeddings.shape[1])
-        index.add(np.array(embeddings).astype('float32'))
-        st.session_state.vector_store = {"index": index, "chunks": chunks}
+        em = get_embed_model()
+        embeddings = em.encode(chunks)
+        idx = faiss.IndexFlatL2(embeddings.shape[1])
+        idx.add(np.array(embeddings).astype('float32'))
+        st.session_state.vector_store = {"index": idx, "chunks": chunks}
         return {"text": text[:2000], "image_b64": None}
     elif "image" in uploaded_file.type:
         b64 = base64.b64encode(uploaded_file.getvalue()).decode('utf-8')
         return {"text": "", "image_b64": b64}
     return None
 
-with st.sidebar:
-    st.header("🧠 AI Brain & Guide")
-  
-    col1, col2 = st.columns([1, 1.2])
-    
-    with col1:
-        model_choice = st.radio(
-            "Select Model:",
-            ["llama-3.3-70b-versatile", "meta-llama/llama-4-scout-17b-16e-instruct", "deepseek-r1-distill-llama-70b"],
-            help="Choose the specialized brain for your task."
-        )
-    
-    with col2:
-        st.markdown("""
-        **Quick Guide:**
-        * **Llama 3.3:** Best for PDFs.
-        * **Llama 4 Scout:** Best for Images.
-        * **DeepSeek R1:** Best for Logic.
-        """)
-
-    st.divider()
-    if st.button("🗑️ Clear Chat"):
-        st.session_state.messages = []
-        st.session_state.vector_store = None
-        st.rerun()
-    st.caption("Developed by T Sai Mahit | B.E in AI-ML (2021-25)")
-
+# Display Chat History
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-prompt_data = st.chat_input(
-    "Ask, Upload, or Record...", 
-    accept_file=True, 
-    file_type=["pdf", "jpg", "png", "jpeg"], 
-    accept_audio=True
-)
+# --- THE PROFESSIONAL UI: Controls at the bottom ---
+with st.container():
+    # Expandable Settings (Like Dropbox/ChatGPT Pro)
+    with st.expander("⚙️ Model Settings & Guide", expanded=False):
+        model_choice = st.selectbox(
+            "Select AI Brain:",
+            ["llama-3.3-70b-versatile", "meta-llama/llama-4-scout-17b-16e-instruct", "deepseek-r1-distill-llama-70b"],
+            help="Choose your model"
+        )
+        st.info("""
+        💡 **Quick Guide:** - **Llama 3.3:** Best for PDFs. 
+        - **Llama 4 Scout:** Best for Images. 
+        - **DeepSeek R1:** Best for Logic.
+        """)
+
+    # Combined Chat Bar (The "Dropbox" Style)
+    prompt_data = st.chat_input(
+        "Ask, Upload, or Record...", 
+        accept_file=True, 
+        file_type=["pdf", "jpg", "png", "jpeg"], 
+        accept_audio=True
+    )
 
 if prompt_data:
     user_text = prompt_data.text or ""
     
+    # 1. Voice Transcription
     if prompt_data.audio:
-        with st.spinner("🎤 Transcribing your voice..."):
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_audio:
-                tmp_audio.write(prompt_data.audio.getvalue())
-                tmp_audio_path = tmp_audio.name
-            with open(tmp_audio_path, "rb") as af:
+        with st.spinner("🎤 Transcribing..."):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                tmp.write(prompt_data.audio.getvalue())
+                tmp_path = tmp.name
+            with open(tmp_path, "rb") as af:
                 tr = client.audio.transcriptions.create(file=af, model="whisper-large-v3")
                 user_text = tr.text
-            os.remove(tmp_audio_path)
+            os.remove(tmp_path)
 
+    # 2. File Processing
     if prompt_data.files:
-        with st.spinner("📂 Indexing file for RAG..."):
+        with st.spinner("📂 Indexing for RAG..."):
             st.session_state.file_context = process_file(prompt_data.files[0])
 
+    # 3. Add to History
     st.session_state.messages.append({"role": "user", "content": user_text})
     with st.chat_message("user"):
         st.markdown(user_text)
 
+    # 4. RAG Retrieval
     context = ""
     if st.session_state.vector_store and user_text:
-        em = get_embed_model()
-        qv = em.encode([user_text])
-        D, I = st.session_state.vector_store["index"].search(np.array(qv).astype('float32'), k=3)
+        qv = get_embed_model().encode([user_text])
+        _, I = st.session_state.vector_store["index"].search(np.array(qv).astype('float32'), k=3)
         context = "\n".join([st.session_state.vector_store["chunks"][i] for i in I[0]])
 
+    # 5. Routing & API Call
     active_model = model_choice
     if st.session_state.file_context["image_b64"]:
         active_model = "meta-llama/llama-4-scout-17b-16e-instruct"
